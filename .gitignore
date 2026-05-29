@@ -1,0 +1,14 @@
+# Build output — regenerable, never commit
+build/
+*.o
+*.a
+
+# macOS noise
+.DS_Store
+
+# VS Code per-user settings (keep project-wide settings later if needed)
+.vscode/
+
+# Editor swap files
+*.swp
+*~

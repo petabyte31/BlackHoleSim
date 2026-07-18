@@ -21,6 +21,7 @@ Schwarzschild geodesic integrator.
 | **Black Hole**  | Cinematic lensed render — photon ring, over-the-top disk halo, beaming     | ✅ Complete |
 | **Quasar**      | Same engine scaled up — volumetric slim disk, twin jets, feeding torus     | ✅ Complete |
 | **Physics Sim** | Live SPH fluid accretion under relativistic gravity, lensed volumetrically | ✅ Complete |
+-------------------------------------------------------------------------------------------
 Photos from the simulator:
 Homepage
 <img width="782" height="435" alt="Screenshot 2026-07-18 at 22 27 22" src="https://github.com/user-attachments/assets/9f1074c1-cc44-4433-986a-7ce5010e6477" />

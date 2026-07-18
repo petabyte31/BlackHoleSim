@@ -33,7 +33,7 @@ Quasar cinema mode
 <img width="686" height="388" alt="Screenshot 2026-07-18 at 22 28 21" src="https://github.com/user-attachments/assets/63ae6494-f050-47a7-b5af-8cf5108f6040" />
 -------------------------------------------------------------------------------------------
 Black Hole for the real physics simulator "looks better in the real sim,when all the sph are moving"
-<img width="371" height="195" alt="Screenshot 2026-07-18 at 22 29 57" src="https://github.com/user-attachments/assets/cb1b487b-52d4-4195-8f12-b911431da307" />
+<img width="680" height="380" alt="Screenshot 2026-07-18 at 22 29 57" src="https://github.com/user-attachments/assets/cb1b487b-52d4-4195-8f12-b911431da307" />
 -------------------------------------------------------------------------------------------
 
 What remains is tuning and scale — dialing the fluid constants, refining the

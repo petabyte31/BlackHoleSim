@@ -3,12 +3,17 @@ build/
 *.o
 *.a
 
+# Stray binary if built outside build/
+/bh_sim
+
 # macOS noise
 .DS_Store
-
-# VS Code per-user settings (keep project-wide settings later if needed)
-.vscode/
 
 # Editor swap files
 *.swp
 *~
+
+# VS Code — ignore per-user settings, but share the build/debug configs
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json

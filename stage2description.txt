@@ -1,0 +1,290 @@
+# Stage 2 — Mutual Gravity (N-body Physics)
+
+The leap from "toy" to "real simulator." Currently only the black hole pulls
+on things; every body lives in its own bubble, ignoring every other body.
+By the end of Stage 2, every body pulls on every other body, mass actually
+matters, and three bodies can do beautiful, chaotic things you didn't program.
+
+This stage is conceptually meatier than Stage 1 even though the code growth
+is moderate (~50–80 lines added). Most of the work is *restructuring* the
+integrator to handle multiple bodies whose accelerations depend on each
+other's positions.
+
+---
+
+## What changes, physically
+
+In Stage 1, each body's acceleration depends only on its own position
+relative to the (fixed) black hole. Bodies are independent. The integrator
+loop is happily one-body-at-a-time:
+
+```cpp
+for (Body& b : bodies) integrate(b, blackHole, dt);
+```
+
+In Stage 2, each body feels the sum of pulls from the black hole **and from
+every other body**. The acceleration on body *i* is
+
+    a_i = a_from_BH(r_i)  +  Σ over j≠i of  G·m_j·(r_j − r_i) / |r_j − r_i|³
+
+This means **you cannot integrate one body at a time anymore**. If you
+update body 0's position first and then compute body 1's acceleration using
+that already-moved body 0, you've broken the symmetry of the timestep and
+your physics is wrong. Everyone has to step forward "simultaneously."
+
+The fix is a two-pass pattern. First pass: compute accelerations for *all*
+bodies using the *current* positions of all bodies. Second pass: apply
+those accelerations and update positions. Verlet's kick-drift-kick becomes:
+
+1. For all i: compute a_i at current positions
+2. For all i: v_i += a_i · dt/2     ← half-kick
+3. For all i: r_i += v_i · dt        ← drift
+4. For all i: compute a_i at new positions
+5. For all i: v_i += a_i · dt/2     ← half-kick
+
+Notice we compute accelerations *twice* per step (steps 1 and 4). The
+acceleration computation is now the most expensive thing your sim does.
+
+---
+
+## The cost of N-body
+
+The pair loop computes interactions for every pair of bodies. With N bodies
+you have N·(N−1)/2 pairs. That's **O(N²)**, which gets brutal fast:
+
+|  N  |  Pair operations per frame  |
+|-----|------------------------------|
+|  10 |  45                          |
+|  50 |  1,225                       |
+| 100 |  4,950                       |
+| 500 |  124,750                     |
+|1000 |  499,500                     |
+
+For your project's scope (a few dozen bodies), O(N²) is fine. Real research
+N-body codes use Barnes-Hut trees (O(N log N)) or fast multipole methods,
+but that's overkill here. **Knowing it's O(N²) and that you'd need
+something smarter at 10,000 bodies is the lesson** — implementing it isn't.
+
+The one optimization absolutely worth doing is **Newton's third law**. The
+force body *j* exerts on *i* is equal and opposite to the force *i* exerts
+on *j*. So when you compute the i-j interaction, you can write the result
+into *both* accel[i] and accel[j] with opposite signs, halving the work.
+
+```cpp
+// for each pair i < j (compute once, apply to both)
+Vec2 d   = r_j - r_i;
+float r  = sqrt(d.x*d.x + d.y*d.y + EPS*EPS);
+float invR3 = 1.0f / (r*r*r);
+Vec2 force_dir = d * (G * invR3);    // direction & magnitude factor
+accel[i] += force_dir * m_j;          // i pulled toward j
+accel[j] -= force_dir * m_i;          // j pulled toward i (opposite)
+```
+
+---
+
+## A subtle thing about mass
+
+In Stage 1, your `b.mass = 1.0f` was unused — only the black hole's mass
+affected anything. In Stage 2, **a body's mass is what makes it pull on
+other bodies**. With your real SI units, a 1 kg body produces effectively
+zero gravity. For mutual gravity to be observable, your bodies need realistic
+astronomical masses. Suggested starting points:
+
+| Body type     | Mass (kg)         |
+|---------------|-------------------|
+| "Spaceship"   |  10⁶  (a million kg, like a heavy spacecraft) |
+| Asteroid      |  10¹⁷             |
+| Moon          |  7.3 × 10²²       |
+| Earth         |  5.97 × 10²⁴      |
+| Sun (don't)   |  1.99 × 10³⁰      |
+
+A spaceship barely perturbs anything. An Earth meaningfully tugs a passing
+moon. Two Earths near each other do interesting choreography. Tuning these
+is part of the stage — there's no "right" answer.
+
+---
+
+## Sub-steps
+
+### Step 1: Refactor `integrate` into a two-pass `step` function
+
+This is the biggest structural change in Stage 2. Move from "function takes
+one body" to "function takes the whole vector of bodies." Suggested signature:
+
+```cpp
+void step(std::vector<Body>& bodies, const BlackHole& bh, float dt);
+```
+
+Inside, you do the five-step Verlet sequence above. You'll need somewhere to
+store each body's acceleration during the step. Two options:
+
+- Add `Vec2 acceleration;` as a field on `Body`
+- Use a parallel local array `std::vector<Vec2> accel(bodies.size());`
+
+The second is cleaner because acceleration isn't really part of a body's
+state — it's a temporary computed each frame. I'd go with the local array.
+
+**Commit:** "Stage 2: refactor integrator to vector-wide step function"
+
+Test: the simulation should still behave *exactly* as it did at the end of
+Stage 1, because you haven't added mutual gravity yet — just restructured.
+This is a non-trivial test. If anything looks different, you broke
+something in the refactor.
+
+### Step 2: Add proper softening, retire the clamp
+
+Replace your `if (r1 < 0.1f) r1 = 0.1f;` with the `+ EPS*EPS` term inside
+the sqrt, in both the BH-gravity computation and the new mutual-gravity
+computation you're about to write. Tune `EPS` (start at ~1e3 metres in
+your SI units — about a kilometre — and adjust).
+
+**Commit:** "Stage 2: proper softening replaces distance clamp"
+
+### Step 3: Add naive mutual gravity (no third-law optimization yet)
+
+Inside your `step` function, between "compute BH accels" and "apply
+half-kick," add a nested loop:
+
+```cpp
+for (size_t i = 0; i < bodies.size(); i++) {
+    for (size_t j = 0; j < bodies.size(); j++) {
+        if (i == j) continue;
+        // compute accel on i from j and add to accel[i]
+    }
+}
+```
+
+This is O(N²) and does each pair *twice*. Inefficient but easy to verify.
+Run with two bodies and watch them orbit each other.
+
+**Commit:** "Stage 2: mutual gravity (naive N² loop)"
+
+### Step 4: Apply Newton's third law
+
+Refactor the nested loop to iterate over each pair only once:
+
+```cpp
+for (size_t i = 0; i < bodies.size(); i++) {
+    for (size_t j = i + 1; j < bodies.size(); j++) {
+        // compute force-direction once, apply to both with opposite signs
+    }
+}
+```
+
+The simulation should behave identically to step 3, but with roughly half
+the math per frame. Add a FPS counter (raylib's `DrawFPS`) to confirm.
+
+**Commit:** "Stage 2: Newton's third law optimization"
+
+### Step 5: Visual mass differentiation
+
+A 10⁶ kg spaceship and a 5.97×10²⁴ kg Earth should not look the same. Map
+mass to draw radius (logarithmically — linear would make Earth a million
+times bigger than a spaceship). And map mass to color (e.g., smaller =
+blue, larger = orange/red).
+
+```cpp
+float displayRadius = bodyWorldRadius * (1.0f + 0.3f * log10f(b.mass / 1e6f));
+```
+
+**Commit:** "Stage 2: bodies sized and colored by mass"
+
+### Step 6: Bind keys to different masses
+
+You currently spawn with key `1`. Make it: `1` spaceship (10⁶ kg),
+`2` moon (7×10²² kg), `3` Earth (6×10²⁴ kg). This is the spec from the
+original 3D plan finally arriving.
+
+**Commit:** "Stage 2: keys spawn different-mass bodies"
+
+### Step 7: The three-body experiment
+
+Clear the scene. Drop two Earths and a moon, or arrange a manual setup.
+Watch what happens. You'll observe **the three-body problem**:
+unpredictable, chaotic, beautiful, sometimes spectacular ejections.
+
+Optional: try to set up the famous **figure-8 three-body orbit** — three
+equal masses chase each other along a figure-8 path forever. Initial
+conditions (in scaled units, you'll need to convert):
+- Body 1: position (−0.97000436, 0.24308753), velocity (0.466203685, 0.43236573)
+- Body 2: position (0.97000436, −0.24308753), velocity (0.466203685, 0.43236573)
+- Body 3: position (0, 0), velocity (−0.93240737, −0.86473146)
+
+Whether it works depends on your units conversion, and getting it stable is
+hard. It's a delightful side quest, not a requirement.
+
+**Commit:** "Stage 2: three-body chaos experimentally observed"
+
+---
+
+## What C++ this stage exercises
+
+- **Two-pass algorithms.** The Verlet refactor enforces it: compute all,
+  then apply all. This pattern appears constantly in real systems work
+  (graphics, physics, networking).
+- **`std::vector` of derived data.** The local `accel` vector lives only
+  inside `step()` — practice with stack-allocated containers and RAII.
+- **`size_t` and signed/unsigned care.** Pair loops use `size_t` indices;
+  watch for `i - 1` underflow if you ever subtract from a `size_t` at 0.
+- **`const` correctness pays off.** Mark `step()`'s parameters thoughtfully:
+  `bodies` mutates, `bh` doesn't. The compiler will catch your mistakes.
+- **Performance awareness without premature optimization.** Implement
+  naive, measure, then optimize the third-law speedup. Verify it actually
+  helps via FPS.
+
+---
+
+## Gotchas you'll hit
+
+**Bodies explode when they pass close to each other.** Increase `EPS`.
+
+**Energy isn't conserved over long runs.** Two causes: (1) `dt` too large,
+(2) softening too small. Verlet conserves energy beautifully only when
+both are well-tuned for your scales.
+
+**Three bodies seem to fly apart immediately.** Initial conditions matter
+hugely. Random placement plus random velocities is a great way to produce
+ejections. Stability needs care.
+
+**Visual size of the moon makes it impossible to see when zoomed out.**
+That's mass-vs-display tension. The log scaling formula keeps masses
+visible across orders of magnitude.
+
+**FPS tanks at 50+ bodies.** Expected. Profile if you want to see *why*
+(it'll be the pair loop). The cure isn't writing assembly — it's spatial
+data structures (Barnes-Hut), which is a Stage 2.5 side quest if you ever
+want to do it.
+
+---
+
+## You're done with Stage 2 when
+
+- Two Earths in the scene perturb each other visibly as they orbit the BH
+- Three bodies do something interesting — orbit, chase, eject, capture
+- The figure-8 orbit either works or you've made an honest attempt
+- Bodies look different sizes and colors based on mass
+- Your `step()` function reads cleanly and you can explain every line
+- The original Stage 1 behavior still works (one body around BH, click-drag)
+- 7+ commits, each a working state
+
+---
+
+## Time estimate
+
+Given your Stage 1 pace: **2–4 days of focused work**. The refactor in
+Step 1 is the time sink — restructuring code you understand is harder than
+writing new code, because you have to hold both the old and the new
+versions in your head simultaneously. Don't rush it. After Step 1 lands,
+the rest cascades quickly.
+
+---
+
+## What comes after
+
+Stage 3 is **promotion to 3D**. The physics barely changes — `Vec2` becomes
+`Vec3`, all your sqrt-of-x²+y² becomes sqrt-of-x²+y²+z², all your
+DrawCircle becomes DrawSphere. The rendering is the actual lift: a 3D
+camera you can orbit with the mouse, perspective projection, depth. You'll
+have a working tiny solar system around your black hole.
+
+But that's two weeks from now. Stage 2 first.

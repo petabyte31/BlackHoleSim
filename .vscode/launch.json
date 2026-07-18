@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run bh_sim",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bh_sim",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cmake-build"
+        }
+    ]
+}
